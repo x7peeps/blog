@@ -1,0 +1,89 @@
+name: Build blog
+
+# 博客源在 x7peeps/x7peeps.github.io 的 hugo-src/，本仓库只做构建 + 发布。
+# 源仓库每日有写作产线自动提交，所以这里用定时拉取；也可以手动 Run workflow。
+
+on:
+  schedule:
+    - cron: "23 */3 * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Fetch source (blobless + sparse)
+        run: |
+          git clone --filter=blob:none --no-checkout \
+            https://github.com/x7peeps/x7peeps.github.io.git src
+          cd src
+          git config core.quotePath false
+          git sparse-checkout init --no-cone
+          git sparse-checkout set \
+            'hugo-src/content' \
+            'hugo-src/layouts' \
+            'hugo-src/static' \
+            'hugo-src/css' \
+            'hugo-src/js' \
+            'hugo-src/fonts' \
+            'hugo-src/images' \
+            'hugo-src/archetypes' \
+            'hugo-src/tools' \
+            'hugo-src/go.mod' \
+            'hugo-src/go.sum' \
+            'hugo-src/hugo.toml' \
+            'hugo-src/robots.txt'
+          git checkout master
+          echo "内容文件数: $(find hugo-src/content -name '_index.md' | wc -l)"
+          du -sh hugo-src
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - uses: peaceiris/actions-hugo@v3
+        with:
+          hugo-version: "0.161.1"
+          extended: true
+
+      - uses: actions/configure-pages@v5
+
+      - name: Build blog
+        env:
+          HUGO_ENVIRONMENT: production
+          HUGO_ENV: production
+        run: |
+          hugo --minify \
+            --source src/hugo-src \
+            --destination "$PWD/out" \
+            --baseURL "https://blog.x7peeps.com/"
+          echo "首页 baseURL 校验:"
+          grep -o 'https://blog\.x7peeps\.com/' out/index.html | head -1
+          test -f out/index.html
+
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: out
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: build
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
